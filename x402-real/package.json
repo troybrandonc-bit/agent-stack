@@ -1,0 +1,20 @@
+{
+  "name": "x402-real",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Part two: the agent-stack concepts meeting the real x402 protocol on Base Sepolia testnet",
+  "scripts": {
+    "wallet": "node make-wallet.js",
+    "shop": "node real-shop.js",
+    "agent": "node real-agent.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "@x402/express": "latest",
+    "@x402/core": "latest",
+    "@x402/evm": "latest",
+    "@x402/fetch": "latest",
+    "viem": "^2.21.0",
+    "dotenv": "^16.4.0"
+  }
+}
