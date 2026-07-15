@@ -1,10 +1,9 @@
 # Everything that broke while building agent-payment infrastructure
 
-*(Draft — personalize before publishing. Written to be posted as the repo's companion piece and adapted for a blog/forum post.)*
 
 I spent a week building a prototype of payment infrastructure for AI agents: cryptographic agent identity, spending mandates, x402-style settlement, the works. The code is in this repo. This document is about what actually happened — every bug, every wrong assumption, every hour lost to something stupid — because that turned out to be where all the learning was.
 
-Context: I'm a self-taught developer, this was my first time touching payments infrastructure, HTTP signatures, or distributed systems. I built it with an AI assistant as pair programmer, breaking and fixing each layer until I understood it.
+Context: I'm a self-taught developer, this was my first time touching payments infrastructure, HTTP signatures, or distributed systems. 
 
 ## The problem
 
@@ -36,7 +35,7 @@ After adding holds, purchases started failing *again*: the unpaid first attempt'
 The nightmare scenario: settlement succeeds, then the merchant crashes before serving the goods. Money moved, customer got nothing, nobody knows. Three layered fixes:
 - **Idempotency**: the same payment arriving twice is a retry, not fraud (the nonce is inside the signature, so "same nonce + valid signature" *proves* it's the same request). Replay the original outcome, charge nothing.
 - **Reversal**: refunds that are themselves idempotent, and a refunded payment can't be re-settled.
-- **Reconciliation**: the merchant keeps its own books of deliveries, periodically compares them against the facilitator's settlements, and auto-refunds anything unmatched. I tested it by making the shop `process.exit(1)` right after settlement: restart, ~20 seconds, `↩️ REFUNDED`. The system heals itself.
+- **Reconciliation**: the merchant keeps its own books of deliveries, periodically compares them against the facilitator's settlements, and auto-refunds anything unmatched. I tested it by making the shop `process.exit(1)` right after settlement: restart, ~20 seconds, `REFUNDED`. The system heals itself.
 
 ### 8. Windows ate my port
 The facilitator printed its startup line and exited, code 0, no error. Hours of theories later: `netsh interface ipv4 show excludedportrange` — Windows had port 5000 reserved at the OS level (thanks, Hyper-V). The isolation test that cracked it: a one-line server on a different port. Minimal reproductions solve half of all debugging.
