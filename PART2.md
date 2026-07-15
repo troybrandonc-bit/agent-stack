@@ -1,50 +1,39 @@
-# Part 2: Connecting the prototype to the real x402 network
+# Part 2: Swapping my fake settlement layer for the real network
 
-Part one ([WRITEUP.md](WRITEUP.md)) was building agent-payment infrastructure from scratch to understand it: mock facilitator, fictional money, real architecture. Part two is the payoff test: **does any of it survive contact with the real protocol?**
+Part one was building the concepts from scratch with a pretend settlement service and pretend money. This part was the test of whether any of it survives contact with the real protocol.
 
-Answer: almost all of it, and the mapping was cleaner than I expected.
+Most of it did, and the mapping was cleaner than I expected.
 
-## The swap
+## What I swapped
 
-I replaced my mock settlement layer with the actual x402 v2 stack: the official `@x402` packages, the public testnet facilitator at x402.org, and real USDC on Base Sepolia (a test network — the money is free from a faucet and worthless, but the protocol, contracts and settlement are the real machinery).
+I took out my mock settlement service and put in the actual x402 stack. The official packages, the public test facilitator, and real USDC on Base Sepolia. Sepolia is a test network, so the money is free from a faucet and worth nothing, but the protocol and the contracts and the settlement are the real machinery. My transaction is on a public blockchain that anyone can look at.
 
-The shop went from my hand-rolled `paymentRequired` middleware to `@x402/express`. The agent went from my `payingFetch` to `@x402/fetch`. Total new code: about 60 lines. Everything else I'd built — the identity thinking, the mandate model, the reconciliation logic — sits *above* this layer and didn't need to change conceptually at all.
+The shop went from my hand written payment middleware to theirs. The agent went from my payment retry helper to theirs. About 60 lines of new code. Everything else I'd built sits above that layer and didn't need to change at all.
 
-## The mapping that made it easy
+## The mapping
 
-|my prototype|real x402|
-|-|-|
-|facilitator.js (SQLite ledger)|x402.org facilitator + Base Sepolia chain|
-|Ed25519-signed payment authorization|EIP-3009 `transferWithAuthorization` over USDC|
-|my `paymentRequired` middleware|`@x402/express` paymentMiddleware|
-|my `payingFetch` 402-retry helper|`@x402/fetch` wrapFetchWithPayment|
-|integer cents|USDC atomic units (6 decimals)|
-|nonces burned in SQLite|nonces tracked by the facilitator|
-|my `/settle` idempotency|same concept, their infrastructure|
+My fake settlement service maps to the real facilitator plus the chain. My Ed25519 payment authorization maps to something called EIP-3009, which is a way of signing "you may take this much USDC from me" without sending a transaction yourself. My integer cents map to USDC atomic units, which are the same idea with six decimal places. My nonces burned in SQLite map to nonces the facilitator tracks. My idempotency check maps to theirs.
 
-Every hard-won lesson from part one had a direct counterpart. Building the toy first meant the real thing read as *recognizable* instead of magical — I already knew why every piece exists, because I'd suffered its absence.
+Every single lesson from part one had a counterpart. Building the toy first meant the real thing read as familiar instead of magic. I already knew why each piece was there because I'd suffered its absence.
 
-Two details I appreciated once I saw them live:
+Two things I liked once I saw them live. The paying client never touches the blockchain and never pays gas, it only signs an authorization and the facilitator submits it. My mock had accidentally arrived at the same shape, because the alternative would mean every agent runs a blockchain node, which is absurd. And while I was debugging, strangers' payments were flowing through the same network in real time. Seeing the thing you're studying being used by other people is motivating in a way that documentation isn't.
 
-* The paying client **never touches the blockchain**: it only signs an authorization; the facilitator submits the transaction and pays the gas. My mock had accidentally landed on the same shape (agents sign, facilitator settles) because the alternative doesn't work — agents can't all be blockchain nodes.
-* `Transfer With Authorization` transactions from total strangers were flowing through the network the whole time I was debugging. Infrastructure you're studying being visibly alive is motivating in a way documentation isn't.
+## What broke
 
-## What broke this time
+**The silent empty wallet.** My agent printed an empty response and nothing else. No error, no status code, no clue. The wallet had no USDC in it because the faucet step hadn't landed, and my code swallowed the failed payment without a word. Same lesson as part one, now a rule I follow: print the status and the raw body before you try to parse anything. Every silent failure this week turned loud the second I did that.
 
-Shorter list than part one, but educational:
+**Reading the wrong page.** Trying to check whether my faucet money had arrived, I ended up staring at the block explorer's global feed, which shows every transaction on the whole network. Hundreds of strangers' payments scrolling past while I looked for mine. You have to go to your own address page. Obvious afterwards.
 
-1. **The empty-wallet silent failure.** My agent printed `Response: {}` and nothing else. No error, no status. Cause: the wallet had no USDC — the faucet step hadn't landed — and my code swallowed the failed payment leg. Lesson repeated from part one, now upgraded to a rule: *print the status code and raw body before you parse anything.* Every silent failure this week became loud the moment I did.
-2. **The block-explorer firehose.** Debugging "did my faucet deposit arrive," I ended up staring at the network-wide transaction feed thinking it was my wallet. Addresses matter; always navigate to `/address/0xYOURS`, not the global feed.
-3. **Sepolia is a surname, not an address.** Ethereum Sepolia, Base Sepolia, Arbitrum Sepolia, Optimism Sepolia — same name, unconnected networks. Tokens sent on the wrong one are invisible on the right one. The network dropdown is where funding goes to die.
-4. **Client/server confusion never fully dies.** I stopped my shop because I thought it "conflicted" with the agent's port. The agent has no port; it's a client. Servers wait forever, clients run once. I knew this. I still did it. Fluency is doing it wrong less often, not never.
+**Sepolia is a surname.** Ethereum Sepolia, Base Sepolia, Arbitrum Sepolia, Optimism Sepolia. Same name, completely separate networks. Tokens sent to the wrong one simply don't exist on the right one. The network dropdown on the faucet is where funding goes to die and I nearly died there.
+
+**Servers wait, clients don't.** At one point I stopped my shop because I thought it was fighting the agent for a port. The agent is a client. It has no port. It calls the shop and exits. The shop has to be running the whole time. I knew all of this and did it wrong anyway, which I think is what fluency actually is. Not never making the mistake, just recognising it faster.
 
 ## The receipt
 
-The run ends with the agent printing a link to its settlement transaction on a public block explorer — an on-chain `Transfer With Authorization` executed because software caught an HTTP 402 and decided to pay. HTTP status 402 was reserved in 1997 for exactly this and waited nearly three decades for a reason to exist.
+The run ends with the agent printing a link to its own settlement on a public block explorer. A transfer that happened because a piece of software hit an HTTP 402 response and decided to pay it. That status code was reserved in 1997 and sat unused for nearly thirty years waiting for a reason to exist.
 
-Code for this part is in [`x402-real/`](x402-real/). Same disclaimer as everything here: testnet, learning artifact, pinned to Base Sepolia on purpose — the mainnet network ID is one digit away and I'd encourage you to respect that digit.
+Code for this part is in the x402-real folder. Test network only, pinned on purpose. The main network id is one digit away from the test one, and I'd suggest respecting that digit.
 
-## What's next
+## Next
 
-Now that the settlement layer is real, the interesting work moves back up the stack: my verifier's identity/mandate layer sitting *in front of* real x402 payments — the part none of the protocol packages provide, and the part I originally built all this to understand.
-
+Now that settlement is real, the interesting work moves back up the stack. My identity and limits layer sitting in front of real payments is the part none of the protocol packages give you, and the part I built all of this to understand.
