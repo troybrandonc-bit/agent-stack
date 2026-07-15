@@ -1,7 +1,5 @@
 # Part 2: Connecting the prototype to the real x402 network
 
-*(Draft — personalize before publishing, same rule as WRITEUP.md.)*
-
 Part one ([WRITEUP.md](WRITEUP.md)) was building agent-payment infrastructure from scratch to understand it: mock facilitator, fictional money, real architecture. Part two is the payoff test: **does any of it survive contact with the real protocol?**
 
 Answer: almost all of it, and the mapping was cleaner than I expected.
@@ -14,21 +12,22 @@ The shop went from my hand-rolled `paymentRequired` middleware to `@x402/express
 
 ## The mapping that made it easy
 
-| my prototype | real x402 |
-|---|---|
-| facilitator.js (SQLite ledger) | x402.org facilitator + Base Sepolia chain |
-| Ed25519-signed payment authorization | EIP-3009 `transferWithAuthorization` over USDC |
-| my `paymentRequired` middleware | `@x402/express` paymentMiddleware |
-| my `payingFetch` 402-retry helper | `@x402/fetch` wrapFetchWithPayment |
-| integer cents | USDC atomic units (6 decimals) |
-| nonces burned in SQLite | nonces tracked by the facilitator |
-| my `/settle` idempotency | same concept, their infrastructure |
+|my prototype|real x402|
+|-|-|
+|facilitator.js (SQLite ledger)|x402.org facilitator + Base Sepolia chain|
+|Ed25519-signed payment authorization|EIP-3009 `transferWithAuthorization` over USDC|
+|my `paymentRequired` middleware|`@x402/express` paymentMiddleware|
+|my `payingFetch` 402-retry helper|`@x402/fetch` wrapFetchWithPayment|
+|integer cents|USDC atomic units (6 decimals)|
+|nonces burned in SQLite|nonces tracked by the facilitator|
+|my `/settle` idempotency|same concept, their infrastructure|
 
 Every hard-won lesson from part one had a direct counterpart. Building the toy first meant the real thing read as *recognizable* instead of magical — I already knew why every piece exists, because I'd suffered its absence.
 
 Two details I appreciated once I saw them live:
-- The paying client **never touches the blockchain**: it only signs an authorization; the facilitator submits the transaction and pays the gas. My mock had accidentally landed on the same shape (agents sign, facilitator settles) because the alternative doesn't work — agents can't all be blockchain nodes.
-- `Transfer With Authorization` transactions from total strangers were flowing through the network the whole time I was debugging. Infrastructure you're studying being visibly alive is motivating in a way documentation isn't.
+
+* The paying client **never touches the blockchain**: it only signs an authorization; the facilitator submits the transaction and pays the gas. My mock had accidentally landed on the same shape (agents sign, facilitator settles) because the alternative doesn't work — agents can't all be blockchain nodes.
+* `Transfer With Authorization` transactions from total strangers were flowing through the network the whole time I was debugging. Infrastructure you're studying being visibly alive is motivating in a way documentation isn't.
 
 ## What broke this time
 
@@ -48,3 +47,4 @@ Code for this part is in [`x402-real/`](x402-real/). Same disclaimer as everythi
 ## What's next
 
 Now that the settlement layer is real, the interesting work moves back up the stack: my verifier's identity/mandate layer sitting *in front of* real x402 payments — the part none of the protocol packages provide, and the part I originally built all this to understand.
+
