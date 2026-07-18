@@ -25,6 +25,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS settlements (
     id TEXT PRIMARY KEY,               -- the payment nonce: one settlement per payment
     tx_id TEXT NOT NULL,
+    intent_ref TEXT,                   -- the payer's correlation ref, carried through
     from_address TEXT NOT NULL,
     to_address TEXT NOT NULL,
     amount_cents INTEGER NOT NULL,
@@ -54,7 +55,7 @@ app.post('/faucet', (req, res) => {
 
 /** What the payer signs: the payment authorization, canonically encoded. */
 function authString(a) {
-  return ['x402-mock-v1', a.from, a.to, a.amountCents, a.nonce, a.validBefore].join('|');
+  return ['x402-mock-v1', a.from, a.to, a.amountCents, a.nonce, a.validBefore, a.intentRef ?? ''].join('|');
 }
 
 function checkPayment(paymentPayload, paymentRequirements) {
@@ -125,9 +126,9 @@ app.post('/settle', (req, res) => {
     db.prepare(`INSERT INTO accounts (address, balance_cents) VALUES (?, ?)
                 ON CONFLICT(address) DO UPDATE SET balance_cents = balance_cents + excluded.balance_cents`)
       .run(auth.to, auth.amountCents);
-    db.prepare(`INSERT INTO settlements (id, tx_id, from_address, to_address, amount_cents, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(auth.nonce, txId, auth.from, auth.to, auth.amountCents, Date.now());
+    db.prepare(`INSERT INTO settlements (id, tx_id, intent_ref, from_address, to_address, amount_cents, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(auth.nonce, txId, auth.intentRef ?? null, auth.from, auth.to, auth.amountCents, Date.now());
   });
   settle();
   console.log(`💸 SETTLED ${euros(auth.amountCents)}  ${auth.from} → ${auth.to}  (${txId})`);
@@ -154,6 +155,21 @@ app.post('/refund', (req, res) => {
   res.json({ ok: true, refunded: s.tx_id, amountCents: s.amount_cents });
 });
 
+/**
+ * "Did this purchase settle?" — answered by the payer's own ref.
+ *
+ * This is what makes crash recovery possible without enumerating the
+ * world. A shop that wrote an intent and then died can ask by that ref
+ * instead of guessing. Enumerating settlements by payee works here
+ * because this ledger is a SQLite table; on a real chain it's slow,
+ * paginated and costs money, so recovery has to be a point lookup.
+ */
+app.get('/settlement-by-ref/:ref', (req, res) => {
+  const s = db.prepare(`SELECT tx_id, from_address, to_address, amount_cents, created_at, reversed_at
+                        FROM settlements WHERE intent_ref = ?`).get(req.params.ref);
+  res.json(s ?? null);      // null = it genuinely never happened
+});
+
 /** Reconciliation feed: what did we settle for this payee? */
 app.get('/settlements/:payee', (req, res) => {
   res.json(db.prepare(`SELECT tx_id, from_address, amount_cents, created_at, reversed_at
@@ -161,9 +177,37 @@ app.get('/settlements/:payee', (req, res) => {
     .all(req.params.payee));
 });
 
+/**
+ * What did this PAYER actually spend on the network, ever?
+ *
+ * This is the question that makes the verifier's counters non-authoritative.
+ * The verifier's spends table is a cache of merchants remembering to call
+ * /commit. This endpoint is what really happened. When they disagree, this
+ * wins — a merchant that settled and then crashed before committing leaves
+ * no local row, and only the network remembers.
+ *
+ * Reversed settlements are returned too, with their reversed_at, because a
+ * refund must subtract from exposure rather than being silently absent.
+ */
+app.get('/settlements-by-payer/:payer', (req, res) => {
+  const since = Number(req.query.since) || 0;
+  res.json(db.prepare(`SELECT tx_id, intent_ref, to_address, amount_cents, created_at, reversed_at
+                       FROM settlements WHERE from_address = ? AND created_at >= ?
+                       ORDER BY created_at DESC`).all(req.params.payer, since));
+});
+
 app.get('/balances', (_req, res) => {
   res.json(db.prepare(`SELECT address, balance_cents FROM accounts`).all()
     .map(a => ({ address: a.address, balance: euros(a.balance_cents) })));
 });
+
+// DEV ONLY — see the note in verifier-service.js. Same guard, same reason.
+if (process.env.ALLOW_DEV_RESET === '1') {
+  app.post('/dev/reset', (_req, res) => {
+    db.exec(`DELETE FROM settlements; DELETE FROM accounts;`);
+    console.log('🧹 DEV RESET — settlements and balances cleared');
+    res.json({ ok: true });
+  });
+}
 
 app.listen(4001, () => console.log('FACILITATOR (settlement layer) on http://localhost:4001\n'));

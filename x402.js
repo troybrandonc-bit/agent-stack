@@ -15,7 +15,7 @@ const crypto = require('crypto');
 const FACILITATOR = 'http://localhost:4001';
 
 /** SERVER SIDE: Express middleware that puts a price on a route. */
-function paymentRequired({ payTo, amountCents, description, onFailure }) {
+function paymentRequired({ payTo, amountCents, description, onFailure, beforeSettle }) {
   return async function x402Middleware(req, res, next) {
     // Any exit from this middleware that isn't next() means the purchase
     // did NOT happen — so whatever the identity layer held must be freed
@@ -51,6 +51,23 @@ function paymentRequired({ payTo, amountCents, description, onFailure }) {
       return fail(() => res.status(400).json({ error: 'Malformed X-PAYMENT header.' }));
     }
 
+    // The ref the payer signed must be the ref we're about to file this
+    // purchase under. If they disagree, our books point at a settlement
+    // that will never carry our ref, and recovery would find nothing.
+    // The agent mints the ref because the agent signs it; we only insist
+    // that it told us the same story twice.
+    const intentRef = req.body?.intentId ?? null;
+    if (paymentPayload?.authorization?.intentRef !== intentRef) {
+      return fail(() => res.status(400).json({
+        error: 'intentId in the request does not match intentRef in the payment.',
+      }));
+    }
+    req.intentRef = intentRef;
+
+    // WRITE THE INTENT BEFORE THE SIDE EFFECT. Everything after this line
+    // is recoverable; everything before it never happened.
+    if (intentRef) await beforeSettle?.(req, intentRef);
+
     // Step 4: settle via the facilitator before serving anything.
     const settle = await fetch(FACILITATOR + '/settle', {
       method: 'POST',
@@ -72,16 +89,18 @@ function paymentRequired({ payTo, amountCents, description, onFailure }) {
 }
 
 /** CLIENT SIDE: build the signed X-PAYMENT header for given requirements. */
-function buildPayment({ requirements, from, privateKey }) {
+function buildPayment({ requirements, from, privateKey, intentRef }) {
   const authorization = {
     from,
     to: requirements.payTo,
     amountCents: requirements.maxAmountRequiredCents,
     nonce: crypto.randomBytes(16).toString('hex'),   // one settlement per nonce
     validBefore: Date.now() + 60_000,
+    intentRef,                                       // the payer's correlation ref
   };
   const authString = ['x402-mock-v1', authorization.from, authorization.to,
-    authorization.amountCents, authorization.nonce, authorization.validBefore].join('|');
+    authorization.amountCents, authorization.nonce, authorization.validBefore,
+    authorization.intentRef ?? ''].join('|');
   const signature = crypto.sign(null, Buffer.from(authString), privateKey).toString('base64');
 
   return Buffer.from(JSON.stringify({ x402Version: 1, scheme: requirements.scheme, authorization, signature }))

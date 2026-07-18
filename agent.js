@@ -34,7 +34,13 @@ function identity() {
 const id = identity();
 
 async function buy(shopUrl, sku, amountCents) {
-  const body = JSON.stringify({ sku, amountCents });
+  // ONE id for the whole purchase, minted once and carried through both
+  // attempts. It identifies the intent, not the HTTP request: the unpaid
+  // attempt and the paid retry are the same purchase and should hold the
+  // budget once, not twice. The verifier uses it to supersede rather than
+  // stack; the shop uses it to find its own settlement after a crash.
+  const intentId = 'int_' + crypto.randomBytes(8).toString('hex');
+  const body = JSON.stringify({ sku, amountCents, intentId });
 
   // Each attempt gets a FRESH identity signature: the verifier burns
   // the nonce on every verification, so replaying the first attempt's
@@ -58,7 +64,9 @@ async function buy(shopUrl, sku, amountCents) {
     const terms = await res.json();
     const requirements = terms.accepts?.[0];
     console.log(`  💳 402 — paying ${(requirements.maxAmountRequiredCents / 100).toFixed(2)}€ to ${requirements.payTo}, retrying`);
-    const xPayment = buildPayment({ requirements, from: AGENT_ID, privateKey: id.privateKey });
+    // The ref goes INSIDE the signed authorization, so nobody downstream
+    // can rewrite it and cut us off from our own settlement.
+    const xPayment = buildPayment({ requirements, from: AGENT_ID, privateKey: id.privateKey, intentRef: intentId });
     res = await attempt({ 'X-PAYMENT': xPayment });
   }
 

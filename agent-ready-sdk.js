@@ -31,6 +31,12 @@ function agentReady({ apiKey, verifierUrl = 'http://localhost:4000' }) {
             'content-digest': req.header('Content-Digest'),
           },
           amountCents: Number.isInteger(req.body?.amountCents) ? req.body.amountCents : undefined,
+          // The correlation id for this logical purchase. The unpaid first
+          // attempt and the paid retry carry the SAME one, which is what
+          // lets the verifier supersede the first hold instead of stacking
+          // a second one against the same budget. Without this forwarded,
+          // holds are anonymous and the retry looks like a fresh purchase.
+          intentId: typeof req.body?.intentId === 'string' ? req.body.intentId : undefined,
         }),
       });
 
@@ -53,12 +59,16 @@ function agentReady({ apiKey, verifierUrl = 'http://localhost:4000' }) {
 
 /** Capture: report a completed purchase so it counts against the mandate. */
 agentReady.commit = function ({ apiKey, verifierUrl = 'http://localhost:4000' }) {
-  return async function commitSpend(agentId, amountCents, holdId) {
+  // `ref` is the intent id: the identity of the PURCHASE. Passing it makes
+  // this call safe to retry -- the verifier counts the first one and
+  // recognises the rest as the same capture. Without it, a retry after a
+  // timeout charges the agent's budget a second time for one sale.
+  return async function commitSpend(agentId, amountCents, holdId, ref) {
     try {
       await fetch(verifierUrl + '/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
-        body: JSON.stringify({ agentId, amountCents, holdId }),
+        body: JSON.stringify({ agentId, amountCents, holdId, ref }),
       });
     } catch {
       // If this fails, verify and commit have diverged — real systems

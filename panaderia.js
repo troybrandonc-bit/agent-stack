@@ -33,7 +33,10 @@ app.post('/checkout', verify, async (req, res) => {
     return res.status(404).json({ error: 'Unknown SKU' });
   }
 
-  commit(req.agent.id, product.priceCents, req.agentHoldId); // capture
+  // No payment here, so there's no settlement to reconcile against and no
+  // intent ref from x402. The body's intentId is the only handle, and for
+  // merchants like this one the coordinator's own record IS the only truth.
+  commit(req.agent.id, product.priceCents, req.agentHoldId, req.body.intentId); // capture
   console.log(`🥖 SALE: ${product.name} to agent "${req.agent.id}" (owner: ${req.agent.owner})`);
   res.json({ ok: true, sold: product.name, to: req.agent });
 });
